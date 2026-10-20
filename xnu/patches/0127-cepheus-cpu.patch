@@ -1,0 +1,27 @@
+diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
+--- a/iokit/Kernel/arm/SweetCPU.cpp
++++ b/iokit/Kernel/arm/SweetCPU.cpp
+@@ -73,8 +73,10 @@ SweetCPU::start(IOService *provider)
+ 	if (*(const uint32_t *)reg->getBytesNoCopy() != cpu->phys_id) {
+ 		return false;
+ 	}
+-	/* topaz (SM6225): MPIDR Aff1 = cluster, Aff0 = core: 0x0-0x3 A53, 0x100-0x103 A73 */
+-	if ((cpu->phys_id >> 8) > 1 || (cpu->phys_id & 0xff) > 3 ||
++	/*
++	 * cepheus (SM8150): only the four Cortex-A76 gold cores are in the ADT
++	 * (MPIDR 0x0, 0x100, 0x200, 0x300); the shim boots xnu on 0x100.
++	 */
++	if (cpu->phys_id != 0x0 && cpu->phys_id != 0x100 &&
++	    cpu->phys_id != 0x200 && cpu->phys_id != 0x300 ||
+ 	    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
+ 		panic("SWEET CPU: invalid topology cpu=%u mpidr=0x%x count=%u",
+ 		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
+@@ -82,7 +84,7 @@ SweetCPU::start(IOService *provider)
+ 	if (!IOCPU::start(provider)) {
+ 		return false;
+ 	}
+-	cpuName = OSSymbol::withCStringNoCopy("Kryo 260");
++	cpuName = OSSymbol::withCStringNoCopy("Kryo 485");
+ 	if (cpuName == NULL) {
+ 		return false;
+ 	}
