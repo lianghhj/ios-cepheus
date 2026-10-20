@@ -7,6 +7,7 @@
  * Any unexpected exception paints a blue panic screen.
  */
 #include <stdint.h>
+#include <stddef.h>
 #include "console.h"
 #include "mmu.h"
 #include "loader.h"
