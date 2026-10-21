@@ -1,22 +1,22 @@
 #!/bin/sh
 # One kernel build at a time on GitHub Actions, without waiting for GitHub to mark the run done.
 #   tools/kbuild.sh NAME [LABEL="extra boot-args"]...
-# Cancels runs still queued/running, dispatches xnu.yml for the pushed HEAD of topaz, takes the
+# Cancels runs still queued/running, dispatches xnu.yml for the pushed HEAD of main, takes the
 # xnu-kernel artifact as soon as it exists (~6 min; GitHub can show the run "in progress" for
 # half an hour after the job ended), then builds ../shim-boot-NAME-LABEL.img per LABEL.
 set -eu
 cd "$(dirname "$0")/.."
 name=${1:?usage: kbuild.sh NAME [LABEL="boot-args"]...}; shift
-repo=MakrSas/ios-topaz
+repo=lianghhj/ios-cepheus
 base="debug=0xc serial=3 cpus=4 keepsyms=1 -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 sweetfb_hz=60"
 head=$(git rev-parse HEAD)
-[ "$(git rev-parse origin/topaz)" = "$head" ] || { echo "push topaz first" >&2; exit 1; }
+[ "$(git rev-parse origin/main)" = "$head" ] || { echo "push main first" >&2; exit 1; }
 
 for r in $(gh run list -R $repo -w xnu.yml -L 20 --json databaseId,status -q ".[]|select(.status!=\"completed\")|.databaseId"); do
   gh run cancel -R $repo "$r" >/dev/null 2>&1 || true
 done
 t0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-gh workflow run xnu.yml -R $repo --ref topaz
+gh workflow run xnu.yml -R $repo --ref main
 run=""
 for i in $(seq 30); do
   sleep 4
@@ -41,9 +41,10 @@ done
 k=../k-$name
 rm -rf "$k"; mkdir -p "$k"
 gh run download -R $repo "$run" -n xnu-kernel -D "$k"
+python3 tools/mkadt-cepheus.py shim/out/cepheus.adt >/dev/null 2>&1 || true
 for v in "$@"; do
   label=${v%%=*}; extra=${v#*=}
-  python3 tools/mkpayload.py "$k/kernel.development.sweet" shim/out/topaz-x2.adt "shim/out/payload-$name-$label.bin" --cmdline "$base $extra" >/dev/null
+  python3 tools/mkpayload.py "$k/kernel.development.sweet" shim/out/cepheus.adt "shim/out/payload-$name-$label.bin" --cmdline "$base $extra" >/dev/null
   (cd shim && ./build.sh "../shim/out/payload-$name-$label.bin" >/dev/null && cp out/shim-boot.img "../../shim-boot-$name-$label.img")
   ls -la "../shim-boot-$name-$label.img"
 done
