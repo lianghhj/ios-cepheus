@@ -34,8 +34,8 @@
 + *
 + * The phone's USB is a Synopsys DWC3 (USB 2.0 only, maximum-speed
 + * high-speed) at 0x0a600000 behind Qualcomm's dwc-usb3-msm wrapper, with a
-+ * QUSB2 PHY at 0x088e2000; its power domain is the USB30_PRIM GDSC and its
-+ * clocks come from GCC (offsets from Linux gcc-sdmmagpie.c). ABL uses this
++ * QUSB2 PHY at 0x088e2000 (cepheus/SM8150: same addresses); its power domain is the USB30_PRIM GDSC and its
++ * clocks come from GCC (offsets from Linux gcc-sm8150.c). ABL uses this
 + * controller for fastboot; this probe only reports what state it is left
 + * in after `fastboot boot`. It never writes a register, and it touches the
 + * DWC3 / PHY register blocks only when the GCC status registers say their
@@ -61,10 +61,10 @@
 +	{ "master", 0x0f010 },
 +	{ "sleep", 0x0f014 },
 +	{ "utmi", 0x0f018 },
-+	{ "cfg-noc-axi", 0x0502c },
-+	{ "aggre-axi", 0x8201c },
++	{ "cfg-noc-axi", 0x0f078 },
++	{ "aggre-axi", 0x0f07c },
 +	{ "ahb2phy", 0x6a004 },
-+	{ "clkref", 0x8c010 },
++	{ "clkref", 0x8c008 },
 +};
 +
 +#define DWC3_PA                 0x0a600000
