@@ -11,16 +11,16 @@
  		clock_get_uptime(&end);
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -490,7 +490,7 @@
- 	platform_stall_panic_or_spin(PLATFORM_STALL_XNU_LOCATION_BSD_INIT);
+@@ -491,7 +491,7 @@
  #endif
+ 	printf("SWEETDBG: bsd_init enter\n");
  
 -#define DEBUG_BSDINIT 0
 +#define DEBUG_BSDINIT 1 /* SWEET cepheus boot debug */
  
  #if DEBUG_BSDINIT
  #define bsd_init_kprintf(x, ...) kprintf("bsd_init: " x, ## __VA_ARGS__)
-@@ -1131,6 +1131,7 @@
+@@ -1132,6 +1132,7 @@
  	u_int32_t       flags;
  	kern_return_t   err;
  
@@ -37,4 +37,4 @@
 +	IOLog("SWEETDBG: IOFindBSDRoot enter rd=%s\n", rdBootVar);
  	if (strcmp(rdBootVar, "ufsroot0") == 0) {
  		extern int sweet_ufs_rootdev(dev_t *dev);
- 		OSSafeReleaseNULL(matching);
+ 		IOLog("SWEETDBG: IOFindBSDRoot reached ufsroot0 branch\n");
