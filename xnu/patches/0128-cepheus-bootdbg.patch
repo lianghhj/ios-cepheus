@@ -1,0 +1,171 @@
+--- a/bsd/dev/sweet_ufs.c	2026-10-25 16:21:32.725165318 +0800
++++ b/bsd/dev/sweet_ufs.c	2026-10-25 16:21:32.730033402 +0800
+@@ -475,7 +475,9 @@
+ static int
+ ufs_take_over_host(void)
+ {
++	printf("SWEETDBG: first UFS MMIO read (HCE) regs=%p\n", (void *)su.regs);
+ 	uint32_t hce = ufs_rd(REG_HCE), hcs = ufs_rd(REG_HCS);
++	printf("SWEETDBG: HCE=0x%x HCS=0x%x\n", hce, hcs);
+ 	if (!(hce & 1) || !(hcs & HCS_DP) || !(hcs & HCS_UTRLRDY)) {
+ 		printf("SWEET UFS: host not ready (hce 0x%x hcs 0x%x)\n", hce, hcs);
+ 		return ENXIO;
+@@ -745,12 +747,15 @@
+ 	char want[64] = "userdata";
+ 	int error;
+ 
++	printf("SWEETDBG: sweet_ufs_init enter\n");
+ 	if (SecureDTLookupEntry(NULL, "/sweet-ufs", &node) != kSuccess ||
+ 	    SecureDTGetProperty(node, "reg", (void const **)&reg, &size) != kSuccess ||
+ 	    size < 2 * sizeof(uintptr_t)) {
+ 		printf("SWEET UFS: no /sweet-ufs node in the device tree\n");
+ 		return ENXIO;
+ 	}
++	printf("SWEETDBG: /sweet-ufs reg pa=0x%llx len=0x%llx\n",
++	    (unsigned long long)reg[0], (unsigned long long)reg[1]);
+ 	PE_parse_boot_argn("ufsroot", want, sizeof(want));
+ 	uint32_t rw = 0;
+ 	PE_parse_boot_argn("ufsrw", &rw, sizeof(rw));
+@@ -760,12 +765,16 @@
+ 	su.cache = (cache == 1);
+ 	su.wait = (wait == 1);
+ 
++	printf("SWEETDBG: calling ml_io_map\n");
+ 	su.regs = ml_io_map(reg[0], reg[1]);
++	printf("SWEETDBG: ml_io_map returned %p\n", (void *)su.regs);
++	printf("SWEETDBG: calling kmem_alloc_contig for %u bytes\n", (unsigned int)DMA_SIZE);
+ 	if (kmem_alloc_contig(kernel_map, &su.dma, DMA_SIZE, PAGE_MASK, 0, 0,
+ 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+ 		printf("SWEET UFS: no contiguous DMA memory\n");
+ 		return ENOMEM;
+ 	}
++	printf("SWEETDBG: DMA at %p\n", (void *)su.dma);
+ 	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)su.dma);
+ 	if (!pn) {
+ 		return ENOMEM;
+@@ -774,8 +783,10 @@
+ 	su.lun = 0;
+ 	su.secsize = DEV_BSIZE;
+ 
++	printf("SWEETDBG: calling ufs_take_over_host\n");
+ 	lck_mtx_lock(&sweet_ufs_lock);
+ 	error = ufs_take_over_host();
++	printf("SWEETDBG: take_over_host+TUR returned %d\n", error);
+ 	if (!error) {
+ 		static const uint8_t tur[6] = { 0x00 };
+ 		/* The first command after the bootloader may report a unit attention. */
+@@ -785,6 +796,7 @@
+ 	if (!error) {
+ 		error = ufs_find_partition(want);
+ 	}
++	printf("SWEETDBG: find_partition done err=%d\n", error);
+ 	lck_mtx_unlock(&sweet_ufs_lock);
+ 	if (error) {
+ 		return error;
+--- a/bsd/kern/bsd_init.c	2026-10-25 16:21:32.725382081 +0800
++++ b/bsd/kern/bsd_init.c	2026-10-25 16:21:32.728496970 +0800
+@@ -489,6 +489,7 @@
+ #if (DEVELOPMENT || DEBUG)
+ 	platform_stall_panic_or_spin(PLATFORM_STALL_XNU_LOCATION_BSD_INIT);
+ #endif
++	printf("SWEETDBG: bsd_init enter\n");
+ 
+ #define DEBUG_BSDINIT 0
+ 
+--- a/iokit/Kernel/IOPlatformExpert.cpp	2026-10-25 16:21:32.725595274 +0800
++++ b/iokit/Kernel/IOPlatformExpert.cpp	2026-10-25 16:21:32.727534707 +0800
+@@ -2056,12 +2056,15 @@
+ bool
+ IOPlatformExpertDevice::startIOServiceMatching(void)
+ {
++	IOLog("SWEETDBG: PE device startIOServiceMatching enter\n");
+ 	workLoop = IOWorkLoop::workLoop();
+ 	if (!workLoop) {
+ 		return false;
+ 	}
+ 
++	IOLog("SWEETDBG: PE device registerService (this fires matching)\n");
+ 	registerService();
++	IOLog("SWEETDBG: PE device registerService returned\n");
+ 
+ 	return true;
+ }
+--- a/iokit/Kernel/IOService.cpp	2026-10-25 16:21:32.725859790 +0800
++++ b/iokit/Kernel/IOService.cpp	2026-10-25 16:21:32.728163196 +0800
+@@ -4685,6 +4685,8 @@
+ 	OSObject          * prop;
+ 	IOUserServer      * userServer;
+ 	bool                ph;
++	const char * candName = service->getName();
++	IOLog("SWEETDBG: match candidate %s\n", (candName ? candName : "(unnamed)"));
+ 
+ 	userServer = NULL;
+ 	obj = service->copyProperty(gIOUserServerNameKey);
+--- a/iokit/Kernel/IOStartIOKit.cpp	2026-10-25 16:21:32.726101696 +0800
++++ b/iokit/Kernel/IOStartIOKit.cpp	2026-10-25 16:21:32.727300115 +0800
+@@ -180,9 +180,11 @@
+ void
+ StartIOKitMatching(void)
+ {
++	IOLog("SWEETDBG: StartIOKitMatching enter\n");
+ 	SOCD_TRACE_XNU(START_IOKIT);
+ 	assert(gRootNub != NULL);
+ 	bool ok = gRootNub->startIOServiceMatching();
++	IOLog("SWEETDBG: root nub startIOServiceMatching returned %d\n", (int)ok);
+ 	if (__improbable(!ok)) {
+ 		panic("Failed to start IOService matching");
+ 	}
+--- a/iokit/bsddev/IOKitBSDInit.cpp	2026-10-25 16:21:32.726230475 +0800
++++ b/iokit/bsddev/IOKitBSDInit.cpp	2026-10-25 16:21:32.729611355 +0800
+@@ -772,6 +772,7 @@
+ //
+ 	if (strcmp(rdBootVar, "ufsroot0") == 0) {
+ 		extern int sweet_ufs_rootdev(dev_t *dev);
++		IOLog("SWEETDBG: IOFindBSDRoot reached ufsroot0 branch\n");
+ 		OSSafeReleaseNULL(matching);
+ 		int ufs_error = sweet_ufs_rootdev(root);
+ 		if (ufs_error) {
+--- a/osfmk/kern/startup.c	2026-10-25 16:21:32.726403269 +0800
++++ b/osfmk/kern/startup.c	2026-10-25 16:21:32.726865137 +0800
+@@ -757,6 +757,7 @@
+ 
+ 	/* No changes to kernel text and rodata beyond this point. */
+ 	kernel_bootstrap_log("machine_lockdown");
++	kprintf("SWEETDBG: pre machine_lockdown\n");
+ 	machine_lockdown();
+ 
+ #ifdef CONFIG_XNUPOST
+@@ -770,7 +771,9 @@
+ 
+ #ifdef  IOKIT
+ 	kernel_bootstrap_log("PE_lockdown_iokit");
++	kprintf("SWEETDBG: pre PE_lockdown_iokit (full driver matching)\n");
+ 	PE_lockdown_iokit();
++	kprintf("SWEETDBG: PE_lockdown_iokit returned\n");
+ #endif
+ 	/*
+ 	 * max_cpus must be nailed down by the time PE_lockdown_iokit() finishes,
+@@ -787,7 +790,9 @@
+ 	 *	Start the user bootstrap.
+ 	 */
+ #ifdef  MACH_BSD
++	kprintf("SWEETDBG: pre bsd_init\n");
+ 	bsd_init();
++	kprintf("SWEETDBG: bsd_init returned\n");
+ #endif
+ 
+ 
+--- a/pexpert/arm/pe_init.c	2026-10-25 16:21:32.726588674 +0800
++++ b/pexpert/arm/pe_init.c	2026-10-25 16:21:32.727101230 +0800
+@@ -378,8 +378,11 @@
+ 	 * against a kernel which has not yet enabled the full set of available
+ 	 * hardware protections.
+ 	 */
++	kprintf("SWEETDBG: PE_lockdown_iokit enter\n");
+ 	zalloc_iokit_lockdown();
++	kprintf("SWEETDBG: zalloc_iokit_lockdown done\n");
+ 	StartIOKitMatching();
++	kprintf("SWEETDBG: StartIOKitMatching returned\n");
+ }
+ 
+ void

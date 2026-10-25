@@ -145,8 +145,15 @@ jobs:
         run: |
           mkdir -p out
           cp -R dxb/fakeroot/System/Library/Kernels/. out/ 2>/dev/null || true
+          # Compress the (large, mostly zeros) kernel for a much smaller artifact
+          if command -v zstd >/dev/null 2>&1; then
+            for k in out/kernel.*; do
+              case "$k" in *.zst) continue;; esac
+              zstd -q -19 -o "$k.zst" "$k" && rm -f "$k" || true
+            done
+          fi
           ls -la out
-          (cd out && shasum -a 256 kernel.* > SHA256SUMS) || true
+          (cd out && shasum -a 256 * > SHA256SUMS) || true
 
       - uses: actions/upload-artifact@v4
         if: always()
