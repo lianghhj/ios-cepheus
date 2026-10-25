@@ -1,0 +1,40 @@
+--- a/iokit/Kernel/IOServicePM.cpp
++++ b/iokit/Kernel/IOServicePM.cpp
+@@ -4214,6 +4214,8 @@
+ 		if (reserved && reserved->uvars && reserved->uvars->userServer) {
+ 			result = reserved->uvars->userServer->serviceSetPowerState(fControllingDriver, this, fHeadNotePowerArrayEntry->capabilityFlags, powerState);
+ 		} else {
++			const char * dbgPwr = fControllingDriver ? fControllingDriver->getName() : NULL;
++			IOLog("SWEETDBG: pwr %s %u\n", dbgPwr ? dbgPwr : "(null)", (unsigned)powerState);
+ 			result = fControllingDriver->setPowerState( powerState, this );
+ 		}
+ 		clock_get_uptime(&end);
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -490,7 +490,7 @@
+ 	platform_stall_panic_or_spin(PLATFORM_STALL_XNU_LOCATION_BSD_INIT);
+ #endif
+ 
+-#define DEBUG_BSDINIT 0
++#define DEBUG_BSDINIT 1 /* SWEET cepheus boot debug */
+ 
+ #if DEBUG_BSDINIT
+ #define bsd_init_kprintf(x, ...) kprintf("bsd_init: " x, ## __VA_ARGS__)
+@@ -1131,6 +1131,7 @@
+ 	u_int32_t       flags;
+ 	kern_return_t   err;
+ 
++	kprintf("SWEETDBG: setconf enter\n");
+ 	err = IOFindBSDRoot(rootdevice, sizeof(rootdevice), &rootdev, &flags);
+ 	if (err) {
+ 		printf("setconf: IOFindBSDRoot returned an error (%d);"
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -770,6 +770,7 @@
+ //
+ //	SWEET: root on a GPT partition of the internal UFS (bsd/dev/sweet_ufs.c)
+ //
++	IOLog("SWEETDBG: IOFindBSDRoot enter rd=%s\n", rdBootVar);
+ 	if (strcmp(rdBootVar, "ufsroot0") == 0) {
+ 		extern int sweet_ufs_rootdev(dev_t *dev);
+ 		OSSafeReleaseNULL(matching);
