@@ -1,0 +1,46 @@
+--- a/iokit/Kernel/IOCatalogue.cpp
++++ b/iokit/Kernel/IOCatalogue.cpp
+@@ -62,6 +62,10 @@
+ #include <IOKit/assert.h>
+ #include <IOKit/IOKitKeysPrivate.h>
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <pexpert/pexpert.h>
++#endif
++
+ #if PRAGMA_MARK
+ #pragma mark Internal Declarations
+ #endif
+@@ -120,6 +124,32 @@
+ 	assert( array && gIOClassKey && gIOProbeScoreKey
+ 	    && gIOModuleIdentifierKey);
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	{
++		/* cepheus v22: sweetbattery=0 drops the built-in SweetBattery
++		 * personality outright. Its GENI I2C SE7 path dead-waits without
++		 * ABL-loaded GENI firmware (nothing loads any on the
++		 * fastboot boot shim->xnu chain), stalling matching inside
++		 * startCandidate's probe - a start() level gate never gets to
++		 * run. The catalogue is the only gate that beats the probe. */
++		int gate = 1;
++		(void)PE_parse_boot_argn("sweetbattery", &gate, sizeof(gate));
++		if (gate == 0 && array) {
++			for (int i = array->getCount() - 1; i >= 0; i--) {
++				OSDictionary * dict = OSDynamicCast(OSDictionary, array->getObject(i));
++				if (!dict) {
++					continue;
++				}
++				OSString * cls = OSDynamicCast(OSString, dict->getObject(gIOClassKey.get()));
++				if (cls && cls->isEqualTo("SweetBattery")) {
++					array->removeObject(i);
++					IOLog("SWEET CATALOGUE: SweetBattery personality removed (sweetbattery=0)\n");
++				}
++			}
++		}
++	}
++#endif
++
+ 	gIOCatalogue = OSMakeShared<IOCatalogue>();
+ 	assert(gIOCatalogue);
+ 	rc = gIOCatalogue->init(array.get());
