@@ -1,0 +1,21 @@
+--- a/iokit/Kernel/IOServicePM.cpp
++++ b/iokit/Kernel/IOServicePM.cpp
+@@ -2579,6 +2579,18 @@
+ 		return kIOPMNotYetInitialized;
+ 	}
+ 
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	{
++		/* cepheus v20: one line per power request - which service, from
++		 * which client, to which state, with which tag, from where. */
++		const char * svcName = getName();
++		IOLog("SWEETDBG: pmrq %s client=%s state=%u tag=%u lr=%p\n",
++		    (svcName ? svcName : "(null)"),
++		    client->getCStringNoCopy(), (unsigned)state, (unsigned)tag,
++		    __builtin_return_address(0));
++	}
++#endif
++
+ 	request = acquirePMRequest( this, kIOPMRequestTypeRequestPowerState );
+ 	if (!request) {
+ 		return kIOReturnNoMemory;

@@ -15,7 +15,25 @@
 
 #define IMEM_RESTART_REASON	0x146bf65cUL	/* qcom,msm-imem@c125000 restart_reason@65c */
 #define RESTART_BOOTLOADER	0x77665500U
+#define RESTART_WDOG		0x77646f67U	/* 'wdog': left when xnu runs under our watchdog */
 #define PSHOLD			0x0c264000UL
+
+/*
+ * APCS WDT0 (sm8150): register map and clock from the cepheus kernel's
+ * drivers/soc/qcom/watchdog_v2.c (qcom,msm-watchdog, WDT_HZ = 32765):
+ *   RST 0x04 (write 1 = pet/restart)   EN 0x08 (bit0 enable)
+ *   STS 0x0C   BARK_TIME 0x10  BITE_TIME 0x14
+ * bark == bite: at expiry the counter bites (resets) without waiting for a
+ * bark interrupt nobody would handle; the kernel does the same when it wants
+ * an immediate reset (msm_trigger_wdog_bite, qcom_wdt_restart).
+ * xnu never pets, so any panic/hang is reset 10 minutes after loader_boot().
+ */
+#define WDT0_BASE		0x17c10000UL
+#define WDT0_RST		0x04
+#define WDT0_EN			0x08
+#define WDT0_BARK_TIME		0x10
+#define WDT0_BITE_TIME		0x14
+#define WDT_TICKS_10MIN		(600u * 32765u)	/* 19,659,000 */
 
 #define GICD_BASE		0x17a00000UL
 #define GICR_BASE		0x17a60000UL
@@ -116,6 +134,47 @@ static void __attribute__((noreturn)) reset(unsigned after_s)
 	wr32(PSHOLD, 0);
 	for (;;)
 		__asm__ volatile("wfe");
+}
+
+/*
+ * Called first thing on every boot path: if IMEM says the last reset came
+ * from a WDT bite while xnu was running, stop here so the failure is visible
+ * (and the phone is not lost). ABL already set USB up on this path; if the
+ * host cannot reach fastboot, power-cycle and the host retries boot.
+ */
+static void
+wdt_reboot_check(void)
+{
+	uint32_t rr = rd32(IMEM_RESTART_REASON);
+
+	con_hex2("RSTRSN", "val=", rr, "iswdt=", rr == RESTART_WDOG);
+	if (rr == RESTART_WDOG) {
+		con_str("SHIM", "WDT reboot detected, waiting for host");
+		for (;;)
+			__asm__ volatile("wfe");
+	}
+}
+
+/*
+ * Arm the watchdog right before xnu is entered (loader_boot). The restart
+ * reason is pre-loaded with RESTART_BOOTLOADER: a bite resets the phone and
+ * ABL comes back in fastboot by itself, so the host can re-boot the shim
+ * with no hands on the phone. Not petted: a working xnu gets 10 minutes of
+ * runtime per boot, a hung or panicking one resets into fastboot.
+ */
+void
+wdt_arm(void)
+{
+	wr32(IMEM_RESTART_REASON, RESTART_BOOTLOADER);
+	wr32(WDT0_BASE + WDT0_EN, 0);
+	wr32(WDT0_BASE + WDT0_RST, 1);
+	wr32(WDT0_BASE + WDT0_BARK_TIME, WDT_TICKS_10MIN);
+	wr32(WDT0_BASE + WDT0_BITE_TIME, WDT_TICKS_10MIN);
+	__asm__ volatile("dsb sy" ::: "memory");
+	wr32(WDT0_BASE + WDT0_EN, 1);
+	wr32(WDT0_BASE + WDT0_RST, 1);
+	__asm__ volatile("dsb sy" ::: "memory");
+	con_hex2("WDT", "armed=", (uint32_t)WDT_TICKS_10MIN, "min=", 10);
 }
 
 /* ---- exceptions ---- */
@@ -279,6 +338,7 @@ static void __attribute__((noreturn)) gold_main(uint64_t dtb)
 {
 	uint64_t mmfr0 = rsr("id_aa64mmfr0_el1");
 
+	wdt_reboot_check();
 	con_hex2("GOLD", "midr=", (uint32_t)rsr("midr_el1"), "mpidr=", (uint32_t)rsr("mpidr_el1"));
 	con_hex2("MMFR0", "lo=", (uint32_t)mmfr0, "tg16=", (mmfr0 >> 20) & 0xf);
 	con_skip();
@@ -520,6 +580,7 @@ void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
 
+	wdt_reboot_check();
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
 	con_clear(RED);

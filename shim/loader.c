@@ -79,8 +79,14 @@ typedef void (*xnu_entry_t)(uint64_t boot_args_pa);
 /* build.sh appends the payload to the Image at the first 4K boundary after _end */
 extern char _end[];
 
+extern void wdt_arm(void);
+
 const char *loader_boot(uintptr_t dtb)
 {
+	/* Last act before xnu: arm the watchdog and pre-load the bootloader
+	 * restart reason, so any panic/hang below comes back to fastboot. */
+	wdt_arm();
+
 	uint64_t rd_start, rd_end;
 	uintptr_t emb = ((uintptr_t)_end + 0xfff) & ~0xfffUL;
 

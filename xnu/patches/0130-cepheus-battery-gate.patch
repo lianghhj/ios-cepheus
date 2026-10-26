@@ -1,0 +1,18 @@
+--- a/iokit/Kernel/arm/SweetBattery.cpp
++++ b/iokit/Kernel/arm/SweetBattery.cpp
+@@ -326,6 +326,15 @@
+ 	(void)sweet_cpufreq_max();
+ 	int real = 1;   /* topaz: real gauge by default; sweetbattery=0 for the static fallback */
+ 	(void)PE_parse_boot_argn("sweetbattery", &real, sizeof(real));
++	if (real == 0) {
++		/* cepheus v20 triage: sweetbattery=0 gates the whole driver. The
++		 * 0091 I2C1/GCC/TLMM physicals are topaz (SM6225) addresses; on
++		 * cepheus (SM8150) real-mode polls the wrong MMIO from a 10s
++		 * IOTimerEventSource, the prime suspect for the IOPM root-domain
++		 * stall. Gate everything: no publish, no timer, no registerService. */
++		IOLog("SWEET BATTERY: gated off (sweetbattery=0)\n");
++		return false;
++	}
+ 	fReal = real == 1 && sweet_i2c1_init() == 0;
+ 	/* Publish a complete source BEFORE registerService wakes powerd. */
+ 	poll();

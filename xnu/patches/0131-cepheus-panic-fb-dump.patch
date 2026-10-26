@@ -1,0 +1,163 @@
+--- a/pexpert/arm/pe_serial.c
++++ b/pexpert/arm/pe_serial.c
+@@ -758,6 +758,26 @@
+ 	return 1;
+ }
+ 
++/* Draw one 8x16 glyph (scaled) at a console cell. Panic context safe:
++ * pure framebuffer stores, no locks and no allocation. */
++static void
++fbcon_draw_char(uint32_t col, uint32_t row, uint8_t c, uint32_t fg, uint32_t bg)
++{
++	const unsigned char *glyph = iso_font + c * 16;
++	uint32_t x0 = col * 8 * FBCON_SCALE, y0 = row * 16 * FBCON_SCALE;
++	for (uint32_t gy = 0; gy < 16; gy++) {
++		for (uint32_t sy = 0; sy < FBCON_SCALE; sy++) {
++			volatile uint32_t *line = fbcon_base + (y0 + gy * FBCON_SCALE + sy) * (fbcon_stride / 4) + x0;
++			for (uint32_t gx = 0; gx < 8; gx++) {
++				uint32_t px = (glyph[gy] & (1u << gx)) ? fg : bg;
++				for (uint32_t sx = 0; sx < FBCON_SCALE; sx++) {
++					line[gx * FBCON_SCALE + sx] = px;
++				}
++			}
++		}
++	}
++}
++
+ static void
+ fbcon_transmit_data(uint8_t c)
+ {
+@@ -772,19 +792,7 @@
+ 	if (fbcon_col >= fbcon_cols) {
+ 		fbcon_newline();
+ 	}
+-	const unsigned char *glyph = iso_font + c * 16;
+-	uint32_t x0 = fbcon_col * 8 * FBCON_SCALE, y0 = fbcon_row * 16 * FBCON_SCALE;
+-	for (uint32_t gy = 0; gy < 16; gy++) {
+-		for (uint32_t sy = 0; sy < FBCON_SCALE; sy++) {
+-			volatile uint32_t *line = fbcon_base + (y0 + gy * FBCON_SCALE + sy) * (fbcon_stride / 4) + x0;
+-			for (uint32_t gx = 0; gx < 8; gx++) {
+-				uint32_t px = (glyph[gy] & (1u << gx)) ? FBCON_FG : FBCON_BG;
+-				for (uint32_t sx = 0; sx < FBCON_SCALE; sx++) {
+-					line[gx * FBCON_SCALE + sx] = px;
+-				}
+-			}
+-		}
+-	}
++	fbcon_draw_char(fbcon_col, fbcon_row, c, FBCON_FG, FBCON_BG);
+ 	fbcon_col++;
+ }
+ 
+@@ -800,6 +808,97 @@
+ 	return 0;
+ }
+ 
++/*
++ * cepheus v20: panic-time console-ring dump across the top of the screen.
++ * The persistent ring (bsd/dev/sweet_ufs.c) already holds every console
++ * byte via _cnputs; on panic the last lines are painted over the first
++ * screen rows (red banner on row 0) so a single photo captures the full
++ * failure scene, USB-independent. Needs no locks, no allocation, no
++ * scrolling state of its own: pmap and the framebuffer mapping are alive
++ * in panic context. Later panic text continues below the dump.
++ */
++#define SWEET_PANIC_ROWS 50
++#define SWEET_PANIC_BUF  (SWEET_PANIC_ROWS * 96)
++
++extern uint64_t sweet_log_position(void);
++extern uint32_t sweet_log_copy(uint64_t *pos, char *out, uint32_t max);
++
++void
++sweet_panic_fb_dump(void)
++{
++	static char dumpbuf[SWEET_PANIC_BUF];
++	static int dump_done;
++	uint32_t n, lines_total, skip, i, col, row;
++
++	if (dump_done || !fbcon_base || fbcon_rows < SWEET_PANIC_ROWS + 2) {
++		return;
++	}
++	dump_done = 1;
++
++	uint64_t pos = sweet_log_position();
++	uint64_t want = (uint64_t)sizeof(dumpbuf);
++	if (pos < want) {
++		want = pos;
++	}
++	pos -= want;
++	n = sweet_log_copy(&pos, dumpbuf, (uint32_t)want);
++
++	/* banner: one full red row so the dump is unmistakable in a photo */
++	for (uint32_t y = 0; y < 16 * FBCON_SCALE; y++) {
++		volatile uint32_t *line = fbcon_base + y * (fbcon_stride / 4);
++		for (uint32_t x = 0; x < fbcon_width; x++) {
++			line[x] = 0xffcc0000u;
++		}
++	}
++
++	/* start at the first line of the last SWEET_PANIC_ROWS lines */
++	lines_total = 0;
++	for (i = 0; i < n; i++) {
++		if (dumpbuf[i] == '\n') {
++			lines_total++;
++		}
++	}
++	skip = lines_total > SWEET_PANIC_ROWS ? lines_total - SWEET_PANIC_ROWS : 0;
++	i = 0;
++	while (skip && i < n) {
++		if (dumpbuf[i++] == '\n') {
++			skip--;
++		}
++	}
++	col = 0;
++	row = 1;
++	for (; i < n && row <= SWEET_PANIC_ROWS; i++) {
++		char ch = dumpbuf[i];
++		if (ch == '\n') {
++			row++;
++			col = 0;
++			continue;
++		}
++		if (ch == '\r') {
++			col = 0;
++			continue;
++		}
++		if (ch == '\t') {
++			col = (col + 8) & ~7u;
++		} else if ((unsigned char)ch >= 32 && (unsigned char)ch < 127) {
++			if (col >= fbcon_cols) {
++				row++;
++				col = 0;
++				if (row > SWEET_PANIC_ROWS) {
++					break;
++				}
++			}
++			fbcon_draw_char(col, row, (uint8_t)ch, FBCON_FG, FBCON_BG);
++			col++;
++		}
++	}
++	/* steer any later panic text below the dump, on a cleared row */
++	fbcon_row = SWEET_PANIC_ROWS + 1;
++	fbcon_col = 0;
++	fbcon_clear_row(fbcon_row);
++	__asm__ volatile("dsb sy" ::: "memory");
++}
++
+ SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) sweet_fbcon_serial_functions =
+ {
+ 	.init = fbcon_init,
+--- a/osfmk/kern/debug.c
++++ b/osfmk/kern/debug.c
+@@ -1075,6 +1075,12 @@
+ #if defined(SWEET)
+ 	/* No CPU/thread/debugger state is required for this first panic copy. */
+ 	sweet_early_panic(panic_format_str, panic_args);
++	{
++		extern void sweet_panic_fb_dump(void);
++		/* cepheus v20: paint the console ring tail over the fb top so a
++		 * photo of the screen carries the whole boot history. */
++		sweet_panic_fb_dump();
++	}
+ #endif
+ 
+ #if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
