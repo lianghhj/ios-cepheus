@@ -16,7 +16,13 @@ import adt  # noqa: E402
 # 0x88000000, so the whole continuous 5 GiB bank 0xc0000000-0x200000000 is
 # usable (2 GiB + 3 GiB, no fixed carve-out inside).
 PHYS_BASE = 0xc0000000
-MEM_SIZE = 0x140000000
+# v23: the top 1 MiB (0x1fff00000-0x200000000) is the embedded panic log
+# (PRAM). Kept out of the kernel-managed memory-map so pmap never hands
+# those pages out; check_for_panic_log() maps it via PLATFORM_PANIC_LOG_PADDR
+# (SWEET.h) and the /pram + chosen/embedded-panic-log-size entries below.
+MEM_SIZE = 0x140000000 - 0x100000
+PANIC_LOG_PADDR = 0x1fff00000
+PANIC_LOG_SIZE = 0x100000
 # /arm-io children are relative to this; it must not be 0 (serial_init bails)
 SOC_BASE = 0x01000000
 
@@ -241,7 +247,10 @@ def build(seed=None, qemu=False):
         ('manufacturer', cstr('Apple Inc.')),
         ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
+        # embedded panic log size for check_for_panic_log() (pexpert/arm/pe_init.c)
+        ('embedded-panic-log-size', u32(PANIC_LOG_SIZE)),
+    ], [node('pram', [('reg', u64(PANIC_LOG_PADDR, PANIC_LOG_SIZE))]),
+        chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,78 @@
+--- a/iokit/Kernel/IOServicePM.cpp
++++ b/iokit/Kernel/IOServicePM.cpp
+@@ -29,6 +29,10 @@
+ #include <IOKit/assert.h>
+ #include <IOKit/IOKitDebug.h>
+ #include <IOKit/IOLib.h>
++
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <pexpert/pexpert.h>	/* PE_parse_boot_argn (sweetpmrq gate) */
++#endif
+ #include <IOKit/IOMessage.h>
+ #include <IOKit/IOPlatformExpert.h>
+ #include <IOKit/IOService.h>
+@@ -2581,13 +2585,28 @@
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 	{
+-		/* cepheus v20: one line per power request - which service, from
+-		 * which client, to which state, with which tag, from where. */
+-		const char * svcName = getName();
+-		IOLog("SWEETDBG: pmrq %s client=%s state=%u tag=%u lr=%p\n",
+-		    (svcName ? svcName : "(null)"),
+-		    client->getCStringNoCopy(), (unsigned)state, (unsigned)tag,
+-		    __builtin_return_address(0));
++		/*
++		 * cepheus v23: the PM request trace is now opt-in via
++		 * sweetpmrq=1. On the real phone a normal boot issues >100k
++		 * root-domain requests (tag = nextRequestTag counter); printing
++		 * every one through the framebuffer console added tens of
++		 * seconds and buried every other milestone. The tag still
++		 * increments (see IOPMrootDomain::changePowerStateWithTagToPriv),
++		 * and callers are powerChangeDone/evaluatePolicy churn - normal
++		 * startup PM activity, not a lockup by itself.
++		 */
++		static int pmrq_enabled = -1;
++		if (pmrq_enabled == -1) {
++			pmrq_enabled = 0;
++			(void)PE_parse_boot_argn("sweetpmrq", &pmrq_enabled, sizeof(pmrq_enabled));
++		}
++		if (pmrq_enabled) {
++			const char * svcName = getName();
++			IOLog("SWEETDBG: pmrq %s client=%s state=%u tag=%u lr=%p\n",
++			    (svcName ? svcName : "(null)"),
++			    client->getCStringNoCopy(), (unsigned)state, (unsigned)tag,
++			    __builtin_return_address(0));
++		}
+ 	}
+ #endif
+ 
+--- a/iokit/Kernel/IOStartIOKit.cpp
++++ b/iokit/Kernel/IOStartIOKit.cpp
+@@ -79,8 +79,16 @@
+ 
+ // RTC is not present on this target
+ #ifndef BCM2837
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	/* cepheus v23: make the 30 s IORTC wait visible - the tail of bsd_init
++	 * output used to end right here and read as a hang. */
++	kprintf("SWEETDBG: IOKitInitializeTime waiting for IORTC (30s max)\n");
++#endif
+ 	IOService::waitForService(
+ 		IOService::resourceMatching("IORTC"), &t );
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	kprintf("SWEETDBG: IOKitInitializeTime IORTC wait done\n");
++#endif
+ #endif
+ #if defined(__i386__) || defined(__x86_64__)
+ 	IOService::waitForService(
+@@ -88,6 +96,9 @@
+ #endif
+ 
+ 	clock_initialize_calendar();
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++	kprintf("SWEETDBG: IOKitInitializeTime calendar initialized\n");
++#endif
+ }
+ 
+ void

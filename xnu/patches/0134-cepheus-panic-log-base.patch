@@ -1,0 +1,22 @@
+--- a/pexpert/pexpert/arm64/SWEET.h
++++ b/pexpert/pexpert/arm64/SWEET.h
+@@ -40,7 +40,18 @@
+ #define HAS_GIC_V3                1
+ 
+ #ifndef ASSEMBLER
+-#define PLATFORM_PANIC_LOG_DISABLED
++/*
++ * cepheus v23: enable the embedded panic log. The PRAM sits at the top of
++ * the 5 GiB kernel-managed bank (0x1fff00000, 1 MiB, per the live FDT
++ * /pram reg and chosen/embedded-panic-log-size); mkadt-cepheus.py carves
++ * it out of the memory-map and also publishes the DT properties, but
++ * check_for_panic_log() takes this hard-wired branch so gPanicBase never
++ * depends on ADT content (v22 booted with a stale ADT: gPanicBase stayed
++ * 0 and every boot printed "debug_log_init: Error!! gPanicBase is still
++ * not initialized").
++ */
++#define PLATFORM_PANIC_LOG_PADDR   0x1fff00000ULL
++#define PLATFORM_PANIC_LOG_SIZE    0x100000
+ #endif /* ! ASSEMBLER */
+ 
+ /*
