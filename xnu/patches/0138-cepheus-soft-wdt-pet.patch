@@ -1,0 +1,105 @@
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -9,6 +9,94 @@
+ #include <IOKit/IOPlatformExpert.h>
+ #include <IOKit/IODeviceTreeSupport.h>
+ #include <IOKit/IOLib.h>
++#include <pexpert/pexpert.h>
++
++extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern "C" kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
++extern "C" void thread_deallocate(thread_t);
++
++/*
++ * cepheus: software petting of the APCS WDT0 the shim armed in loader_boot()
++ * (bark = bite = 600 s at 32765 Hz). Nothing in xnu pets the hardware
++ * watchdog, so even a perfectly healthy boot would be bitten exactly 10
++ * minutes after boot; three real-phone experiments also never saw it fire,
++ * so its live state is unknown inside xnu. This thread:
++ *   - dumps EN/BARK/BITE/STS once (finds out whether the counter even runs),
++ *   - re-arms the WDT if it was disabled (same sequence the shim uses),
++ *   - pets it every 30 s. While the kernel runs nothing fires; if the kernel
++ *     ever stops (panic that waits, gate deadlock, scheduler hang), petting
++ *     stops and the WDT bites 10 minutes after the last pet - back to
++ *     fastboot with no hands on the phone.
++ * sweetswd=0 disables the thread.
++ */
++#define SWEET_WDT_PA        0x17c10000u
++#define SWEET_WDT_RST       0x04
++#define SWEET_WDT_EN        0x08
++#define SWEET_WDT_STS       0x0c
++#define SWEET_WDT_BARK      0x10
++#define SWEET_WDT_BITE      0x14
++#define SWEET_WDT_600S      0x12bf76cu  /* 600 * 32765 */
++
++static volatile uint32_t *sweet_wdt_regs;
++
++static inline uint32_t sweet_wdt_rd(unsigned off)
++{
++	return sweet_wdt_regs[off / 4];
++}
++
++static inline void sweet_wdt_wr(unsigned off, uint32_t v)
++{
++	sweet_wdt_regs[off / 4] = v;
++}
++
++static void
++sweet_wdt_thread(void * /*arg*/, wait_result_t /*wr*/)
++{
++	int first = 1;
++	for (;;) {
++		uint32_t en = sweet_wdt_rd(SWEET_WDT_EN);
++		if (first) {
++			IOLog("SWEET WDT: EN=%#x BARK=%#x BITE=%#x STS=%#x, petting every 30s\n",
++			    en, sweet_wdt_rd(SWEET_WDT_BARK), sweet_wdt_rd(SWEET_WDT_BITE),
++			    sweet_wdt_rd(SWEET_WDT_STS));
++			if (!(en & 1)) {
++				IOLog("SWEET WDT: not enabled - re-arming 600s bark/bite\n");
++				sweet_wdt_wr(SWEET_WDT_EN, 0);
++				sweet_wdt_wr(SWEET_WDT_RST, 1);
++				sweet_wdt_wr(SWEET_WDT_BARK, SWEET_WDT_600S);
++				sweet_wdt_wr(SWEET_WDT_BITE, SWEET_WDT_600S);
++				__asm__ volatile("dsb sy" ::: "memory");
++				sweet_wdt_wr(SWEET_WDT_EN, 1);
++				sweet_wdt_wr(SWEET_WDT_RST, 1);
++			}
++			first = 0;
++		}
++		sweet_wdt_wr(SWEET_WDT_RST, 1); /* pet: 600 s away from bark/bite */
++		IOSleep(30 * 1000);
++	}
++}
++
++static void
++sweet_wdt_start(void)
++{
++	int swd = 1;
++	(void)PE_parse_boot_argn("sweetswd", &swd, sizeof(swd));
++	if (!swd) {
++		IOLog("SWEET WDT: petting disabled (sweetswd=0)\n");
++		return;
++	}
++	sweet_wdt_regs = (volatile uint32_t *)ml_io_map(SWEET_WDT_PA, 0x1000);
++	if (!sweet_wdt_regs) {
++		IOLog("SWEET WDT: cannot map 0x17c10000\n");
++		return;
++	}
++	thread_t thread;
++	if (kernel_thread_start(&sweet_wdt_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		IOLog("SWEET WDT: cannot start petting thread\n");
++	}
++}
+ 
+ class SweetPlatformExpert : public IODTPlatformExpert {
+ 	OSDeclareDefaultStructors(SweetPlatformExpert);
+@@ -31,6 +119,7 @@
+ 	}
+ 	registerService();
+ 	IOLog("SWEET: platform expert registered\n");
++	sweet_wdt_start();
+ 	return true;
+ }
+ 
