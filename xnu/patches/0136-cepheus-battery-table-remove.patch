@@ -1,10 +1,8 @@
-diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
-index 53c892e..8ec147c 100644
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -1,10 +1,5 @@
-      "     'IOMatchCategory' = SweetHIDTouch;"
-      "   },"
+@@ -78,10 +78,5 @@
+     "     'IOMatchCategory' = SweetHIDTouch;"
+     "   },"
 -    "   {"
 -    "     'IOClass'         = SweetBattery;"
 -    "     'IOProviderClass' = IOResources;"
