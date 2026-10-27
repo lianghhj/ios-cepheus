@@ -1,0 +1,271 @@
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -11,92 +11,7 @@
+ #include <IOKit/IOLib.h>
+ #include <pexpert/pexpert.h>
+ 
+-extern "C" vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
+-extern "C" kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
+-extern "C" void thread_deallocate(thread_t);
+-
+-/*
+- * cepheus: software petting of the APCS WDT0 the shim armed in loader_boot()
+- * (bark = bite = 600 s at 32765 Hz). Nothing in xnu pets the hardware
+- * watchdog, so even a perfectly healthy boot would be bitten exactly 10
+- * minutes after boot; three real-phone experiments also never saw it fire,
+- * so its live state is unknown inside xnu. This thread:
+- *   - dumps EN/BARK/BITE/STS once (finds out whether the counter even runs),
+- *   - re-arms the WDT if it was disabled (same sequence the shim uses),
+- *   - pets it every 30 s. While the kernel runs nothing fires; if the kernel
+- *     ever stops (panic that waits, gate deadlock, scheduler hang), petting
+- *     stops and the WDT bites 10 minutes after the last pet - back to
+- *     fastboot with no hands on the phone.
+- * sweetswd=0 disables the thread.
+- */
+-#define SWEET_WDT_PA        0x17c10000u
+-#define SWEET_WDT_RST       0x04
+-#define SWEET_WDT_EN        0x08
+-#define SWEET_WDT_STS       0x0c
+-#define SWEET_WDT_BARK      0x10
+-#define SWEET_WDT_BITE      0x14
+-#define SWEET_WDT_600S      0x12bf76cu  /* 600 * 32765 */
+-
+-static volatile uint32_t *sweet_wdt_regs;
+-
+-static inline uint32_t sweet_wdt_rd(unsigned off)
+-{
+-	return sweet_wdt_regs[off / 4];
+-}
+-
+-static inline void sweet_wdt_wr(unsigned off, uint32_t v)
+-{
+-	sweet_wdt_regs[off / 4] = v;
+-}
+-
+-static void
+-sweet_wdt_thread(void * /*arg*/, wait_result_t /*wr*/)
+-{
+-	int first = 1;
+-	for (;;) {
+-		uint32_t en = sweet_wdt_rd(SWEET_WDT_EN);
+-		if (first) {
+-			IOLog("SWEET WDT: EN=%#x BARK=%#x BITE=%#x STS=%#x, petting every 30s\n",
+-			    en, sweet_wdt_rd(SWEET_WDT_BARK), sweet_wdt_rd(SWEET_WDT_BITE),
+-			    sweet_wdt_rd(SWEET_WDT_STS));
+-			if (!(en & 1)) {
+-				IOLog("SWEET WDT: not enabled - re-arming 600s bark/bite\n");
+-				sweet_wdt_wr(SWEET_WDT_EN, 0);
+-				sweet_wdt_wr(SWEET_WDT_RST, 1);
+-				sweet_wdt_wr(SWEET_WDT_BARK, SWEET_WDT_600S);
+-				sweet_wdt_wr(SWEET_WDT_BITE, SWEET_WDT_600S);
+-				__asm__ volatile("dsb sy" ::: "memory");
+-				sweet_wdt_wr(SWEET_WDT_EN, 1);
+-				sweet_wdt_wr(SWEET_WDT_RST, 1);
+-			}
+-			first = 0;
+-		}
+-		sweet_wdt_wr(SWEET_WDT_RST, 1); /* pet: 600 s away from bark/bite */
+-		IOSleep(30 * 1000);
+-	}
+-}
+-
+-static void
+-sweet_wdt_start(void)
+-{
+-	int swd = 1;
+-	(void)PE_parse_boot_argn("sweetswd", &swd, sizeof(swd));
+-	if (!swd) {
+-		IOLog("SWEET WDT: petting disabled (sweetswd=0)\n");
+-		return;
+-	}
+-	sweet_wdt_regs = (volatile uint32_t *)ml_io_map(SWEET_WDT_PA, 0x1000);
+-	if (!sweet_wdt_regs) {
+-		IOLog("SWEET WDT: cannot map 0x17c10000\n");
+-		return;
+-	}
+-	thread_t thread;
+-	if (kernel_thread_start(&sweet_wdt_thread, NULL, &thread) == KERN_SUCCESS) {
+-		thread_deallocate(thread);
+-	} else {
+-		IOLog("SWEET WDT: cannot start petting thread\n");
+-	}
+-}
++extern "C" void sweet_wd_start(void);
+ 
+ class SweetPlatformExpert : public IODTPlatformExpert {
+ 	OSDeclareDefaultStructors(SweetPlatformExpert);
+@@ -119,7 +34,7 @@
+ 	}
+ 	registerService();
+ 	IOLog("SWEET: platform expert registered\n");
+-	sweet_wdt_start();
++	sweet_wd_start();
+ 	return true;
+ }
+ 
+--- /dev/null
++++ b/iokit/Kernel/arm/SweetWatchdogThread.cpp
+@@ -0,0 +1,135 @@
++/*
++ * cepheus: software watchdog driven by boot/console progress.
++ *
++ * Round-1 lesson (0138): a petting thread alone is useless - the hang class
++ * we actually hit leaves the scheduler and worker threads alive (boot simply
++ * stops advancing), so the petting kept running and the hardware WDT never
++ * fired. What distinguishes a hang is PROGRESS stopping. So:
++ *
++ *   - every console write (osfmk _cnputs) bumps the progress counter, as do
++ *     the explicit milestone hooks;
++ *   - a kernel thread wakes every 30 s. Progress advanced -> reset the
++ *     check counter and pet the shim-armed hardware WDT0 (0x17c10000,
++ *     bark = bite = 600 s) as a second resort. No progress for 20 checks
++ *     (10 min) -> log and halt_all_cpus(TRUE) (the panic-reboot path).
++ *     Petting also stops, so even if the reboot itself fails the hardware
++ *     WDT bites <=10 min later.
++ *
++ * This intentionally stays noisy-but-simple for the bring-up phase: any
++ * fully quiet 10 minutes ends in a reboot to fastboot, which is exactly
++ * what unattended experiments want. Revisit before a "stable userland"
++ * exists (sweetswd=0 disables the thread).
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <IOKit/IOLib.h>
++#include <pexpert/pexpert.h>
++
++extern "C" {
++kern_return_t kernel_thread_start(thread_continue_t, void *, thread_t *);
++void thread_deallocate(thread_t);
++void halt_all_cpus(boolean_t reboot) __attribute__((noreturn));
++vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++}
++
++static volatile SInt32 g_wdProgress = 1;   /* boot starts at 1 */
++static volatile SInt32 g_wdLastSeen = 1;
++static volatile SInt32 g_wdHangChecks = 0;
++
++/* Any boot progress: console output (every _cnputs) and milestone hooks. */
++extern "C" void
++sweet_wd_progress(void)
++{
++	OSIncrementAtomic(&g_wdProgress);
++}
++
++/* ---- hardware WDT0 (same block the shim arms in loader_boot) ---- */
++
++#define SWEET_WDT_PA       0x17c10000u
++#define SWEET_WDT_RST      0x04
++#define SWEET_WDT_EN       0x08
++#define SWEET_WDT_STS      0x0c
++#define SWEET_WDT_BARK     0x10
++#define SWEET_WDT_BITE     0x14
++#define SWEET_WDT_600S     0x12bf76cu  /* 600 * 32765 */
++
++static volatile uint32_t *sweet_wdt_regs;
++
++static inline uint32_t sweet_wdt_rd(unsigned off)
++{
++	return sweet_wdt_regs[off / 4];
++}
++
++static inline void sweet_wdt_wr(unsigned off, uint32_t v)
++{
++	sweet_wdt_regs[off / 4] = v;
++}
++
++/* ---- the thread ---- */
++
++static void
++sweet_wdt_thread(void * /*arg*/, wait_result_t /*wr*/)
++{
++	int first = 1;
++	for (;;) {
++		SInt32 progress = g_wdProgress;
++		SInt32 last = g_wdLastSeen;
++
++		if (first) {
++			IOLog("SWEET WDT: EN=%#x BARK=%#x BITE=%#x STS=%#x, watching progress every 30s\n",
++			    sweet_wdt_rd(SWEET_WDT_EN), sweet_wdt_rd(SWEET_WDT_BARK),
++			    sweet_wdt_rd(SWEET_WDT_BITE), sweet_wdt_rd(SWEET_WDT_STS));
++			if (!(sweet_wdt_rd(SWEET_WDT_EN) & 1)) {
++				IOLog("SWEET WDT: hardware WDT not enabled - re-arming 600s bark/bite\n");
++				sweet_wdt_wr(SWEET_WDT_EN, 0);
++				sweet_wdt_wr(SWEET_WDT_RST, 1);
++				sweet_wdt_wr(SWEET_WDT_BARK, SWEET_WDT_600S);
++				sweet_wdt_wr(SWEET_WDT_BITE, SWEET_WDT_600S);
++				__asm__ volatile("dsb sy" ::: "memory");
++				sweet_wdt_wr(SWEET_WDT_EN, 1);
++				sweet_wdt_wr(SWEET_WDT_RST, 1);
++			}
++			first = 0;
++		}
++
++		if (progress != last) {
++			g_wdLastSeen = progress;
++			g_wdHangChecks = 0;
++			sweet_wdt_wr(SWEET_WDT_RST, 1); /* pet while alive */
++		} else {
++			SInt32 checks = OSIncrementAtomic(&g_wdHangChecks);
++			if ((checks % 5) == 0) {
++				IOLog("SWEET WDT: no progress, check %d/20\n", checks + 1);
++			}
++			if (checks >= 19) {
++				IOLog("SWEET WDT: HANG DETECTED - rebooting to fastboot\n");
++				/* stop petting: if this reboot fails the hardware WDT
++				 * (last petted <=10 min ago) still bites */
++				halt_all_cpus(TRUE);
++			}
++		}
++		IOSleep(30 * 1000);
++	}
++}
++
++extern "C" void
++sweet_wd_start(void)
++{
++	int swd = 1;
++	(void)PE_parse_boot_argn("sweetswd", &swd, sizeof(swd));
++	if (!swd) {
++		IOLog("SWEET WDT: progress watchdog disabled (sweetswd=0)\n");
++		return;
++	}
++	sweet_wdt_regs = (volatile uint32_t *)ml_io_map(SWEET_WDT_PA, 0x1000);
++	if (!sweet_wdt_regs) {
++		IOLog("SWEET WDT: cannot map 0x17c10000\n");
++		return;
++	}
++	thread_t thread;
++	if (kernel_thread_start(&sweet_wdt_thread, NULL, &thread) == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		IOLog("SWEET WDT: cannot start watchdog thread\n");
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+--- a/osfmk/console/serial_console.c
++++ b/osfmk/console/serial_console.c
+@@ -269,6 +269,7 @@
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ extern void sweet_log_append(const char *c, int size);  /* bsd/dev/sweet_ufs.c */
++extern void sweet_wd_progress(void);  /* iokit/Kernel/arm/SweetWatchdogThread.cpp */
+ /*
+  * Set by AppleCLCD (boot-arg sweetfb_noconsole=1) once the GUI presents:
+  * console text still goes to the persistent log, but is not drawn over
+@@ -314,6 +315,7 @@
+ 
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 	sweet_log_append(c, size);
++	sweet_wd_progress();  /* console output = boot/system progress */
+ 	if (sweet_console_muted && !panic_active()) {
+ 		return;
+ 	}
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -14,6 +14,7 @@
+ iokit/Kernel/arm/SweetEntitlements.cpp                           optional iokitcpp
+ iokit/Kernel/arm/SweetKeyStore.cpp                               optional iokitcpp
+ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
++iokit/Kernel/arm/SweetWatchdogThread.cpp                        optional iokitcpp
+ iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
+ iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
+ iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp
