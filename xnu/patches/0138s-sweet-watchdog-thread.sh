@@ -69,12 +69,12 @@ else:
     print('0138s: files.arm64 already has entry')
 PYEOF
 
-# 3) inject call at IOPMrootDomain::attach(IOPMrootDomain) site in IOPM.cpp
+# 3) inject call at IOPMrootDomain::attach(IOPMrootDomain) site in IOServicePM.cpp
 python3 << 'PYEOF'
 import re
-p = 'iokit/Kernel/IOPM.cpp'
+p = 'iokit/Kernel/IOServicePM.cpp'
 s = open(p).read()
-# find IORootParent attach into root domain (IOPM.cpp, initializeIOPM)
+# find IORootParent attach into root domain (IOServicePM.cpp, initializeIOPM)
 anchor = 'gIOPMRootDomain' 
 # safest anchor: after IOPMrootDomain::initializeIOPM's PMinit? Use the
 # resourceMatching-free spot: the start of IOPMrootDomain::start
@@ -99,9 +99,9 @@ else:
     print('0138s: already present')
 PYEOF
 
-# 4) progress calls at known SWEETDBG milestones in IOPM.cpp
+# 4) progress calls at known SWEETDBG milestones in IOServicePM.cpp
 python3 << 'PYEOF'
-p = 'iokit/Kernel/IOPM.cpp'
+p = 'iokit/Kernel/IOServicePM.cpp'
 s = open(p).read()
 if 'sweet_wd_progress' not in s:
     # after IORTC wait print (0132's IOKitInitializeTime trace)
