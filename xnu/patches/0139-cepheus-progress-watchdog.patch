@@ -261,11 +261,10 @@
  	}
 --- a/iokit/conf/files.arm64
 +++ b/iokit/conf/files.arm64
-@@ -14,6 +14,7 @@
+@@ -14,5 +14,6 @@
  iokit/Kernel/arm/SweetEntitlements.cpp                           optional iokitcpp
  iokit/Kernel/arm/SweetKeyStore.cpp                               optional iokitcpp
  iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
 +iokit/Kernel/arm/SweetWatchdogThread.cpp                        optional iokitcpp
  iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
  iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
- iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp
