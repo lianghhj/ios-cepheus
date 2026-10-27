@@ -53,7 +53,21 @@ void sweet_swd_start(OSObject *owner, IOWorkLoop *wl)
 EOF
 
 # 2) files.arm64 entry
-grep -q SweetWatchdogThread iokit/conf/files.arm64 ||   sed -i '/SweetFramebuffer.cpp/a iokit/Kernel/arm/SweetWatchdogThread.cpp                       optional iokitcpp' iokit/conf/files.arm64
+python3 << 'PYEOF'
+p = 'iokit/conf/files.arm64'
+s = open(p).read()
+if 'SweetWatchdogThread' not in s:
+    lines2 = s.split('\n')
+    out2 = []
+    for l2 in lines2:
+        out2.append(l2)
+        if 'SweetFramebuffer.cpp' in l2:
+            out2.append('iokit/Kernel/arm/SweetWatchdogThread.cpp                       optional iokitcpp')
+    open(p, 'w').write('\n'.join(out2))
+    print('0138s: files.arm64 entry added')
+else:
+    print('0138s: files.arm64 already has entry')
+PYEOF
 
 # 3) inject call at IOPMrootDomain::attach(IOPMrootDomain) site in IOPM.cpp
 python3 << 'PYEOF'
