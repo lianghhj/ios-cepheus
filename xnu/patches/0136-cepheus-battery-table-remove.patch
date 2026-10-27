@@ -1,0 +1,14 @@
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -77,11 +77,6 @@
+     "     'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = SweetHIDTouch;"
+     "   },"
+-    "   {"
+-    "     'IOClass'         = SweetBattery;"
+-    "     'IOProviderClass' = IOResources;"
+-    "     'IOMatchCategory' = SweetBattery;"
+-    "   },"
+ #endif
+     "   {"
+     "     'IOClass'         = IOPanicPlatform;"

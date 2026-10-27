@@ -148,7 +148,7 @@ def build(seed=None, qemu=False):
         ]))
     else:
         # boot CPU 0x100 must be cpu0 (SweetCPU expects logical 0 = MPIDR 0x100)
-        for core, mpidr in enumerate((0x100, 0x200, 0x300, 0x0)):
+        for core, mpidr in enumerate((0x100, 0x200, 0x300)):
             cpu_nodes.append(node(f'cpu{core}', [
                 ph(),
                 ('device_type', cstr('cpu')),
