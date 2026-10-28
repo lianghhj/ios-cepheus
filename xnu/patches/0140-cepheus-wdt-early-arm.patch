@@ -1,0 +1,12 @@
+--- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
++++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
+@@ -33,6 +33,9 @@
+ bool
+ SweetPlatformExpert::start(IOService * provider)
+ {
++    /* 0140: arm watchdog EARLY - the stall point is later in start(),
++     * so the watchdog must be running before we get there */
++    sweet_wd_start();
+     IOLog("SWEET: starting device-tree platform expert\n");
+     registerService();
+     IOLog("SWEET: platform expert registered\n");
