@@ -1,0 +1,28 @@
+diff --git a/iokit/Kernel/arm/SweetWatchdogThread.cpp b/iokit/Kernel/arm/SweetWatchdogThread.cpp
+index 35f2dbd..e40c19f 100644
+--- a/iokit/Kernel/arm/SweetWatchdogThread.cpp
++++ b/iokit/Kernel/arm/SweetWatchdogThread.cpp
+@@ -70,6 +70,7 @@ static void
+ sweet_wdt_thread(void * /*arg*/, wait_result_t /*wr*/)
+ {
+ 	int first = 1;
++	int alive = 0;
+ 	for (;;) {
+ 		SInt32 progress = g_wdProgress;
+ 		SInt32 last = g_wdLastSeen;
+@@ -91,6 +92,15 @@ sweet_wdt_thread(void * /*arg*/, wait_result_t /*wr*/)
+ 			first = 0;
+ 		}
+ 
++		/* v32 heartbeat: make the watchdog thread visible on the
++		 * framebuffer every 30 s. Distinguishes (a) kernel frozen
++		 * (heartbeat stops - screen freezes on last line) from
++		 * (b) alive-stalled (heartbeat keeps scrolling; the existing
++		 * progress counter decides when to halt). Unconditional in
++		 * this diagnostic build - revert to silent after bring-up. */
++		IOLog("SWEETCHK: wd alive %d prog=%d checks=%d\n",
++		    ++alive, progress, g_wdHangChecks);
++
+ 		if (progress != last) {
+ 			g_wdLastSeen = progress;
+ 			g_wdHangChecks = 0;
